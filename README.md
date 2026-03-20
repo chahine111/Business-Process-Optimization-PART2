@@ -1,5 +1,5 @@
 # Business Process Simulation & Optimization
-### BPI 2017 — Loan Application Process · TU Munich BPSO Assignment
+### BPI 2017 — Loan Application Process
 
 A data-driven discrete-event simulation (DES) of the BPI 2017 loan
 application process, extended with six resource allocation methods and a
