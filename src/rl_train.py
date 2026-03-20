@@ -1,29 +1,9 @@
 """
 src/rl_train.py
 
-Training script for the RL resource-allocation policy (Method C).
-Reference: Middelhuis et al. 2025 — "Learning policies for resource allocation
-           in business processes".
-
-How to run
-----------
-    cd <project_root>
-    python src/rl_train.py
-
-Output
-------
-    models/rl_policy.zip        — trained MaskablePPO model
-    models/rl_learning_curve.csv — episode rewards over training
-
-Configuration
--------------
-Adjust TOTAL_TIMESTEPS, N_STEPS, etc. below to trade off training time vs
-policy quality.  The default 100,000 timesteps is a quick smoke-test;
-increase to 500,000+ for a well-trained policy.
-
-Dependencies
-------------
-    pip install stable-baselines3 sb3-contrib gymnasium
+Trains a MaskablePPO policy on 3 months of BPI 2017 data.
+Saves models/rl_policy.zip and models/rl_learning_curve.csv.
+Increase TOTAL_TIMESTEPS (default 100k) for a better policy.
 """
 
 from __future__ import annotations
@@ -32,14 +12,12 @@ import csv
 import sys
 from pathlib import Path
 
-# Make src/ importable when running from the project root.
 src_dir = Path(__file__).resolve().parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
 import numpy as np
 
-# ── Check optional dependencies ────────────────────────────────────────────
 try:
     import gymnasium
     from sb3_contrib import MaskablePPO
@@ -52,7 +30,6 @@ except ImportError as exc:
     )
     raise
 
-# ── Project imports ────────────────────────────────────────────────────────
 from arrival_model_1_2 import ArrivalProcess
 from resource_availability_1_5 import ResourceAvailabilityModel
 from permissions_model_1_6 import PermissionsModel
@@ -62,9 +39,6 @@ from run_simulation import NextActivityPredictor
 from bpmn_adapter import BPMNAdapter
 from rl_environment import BPSimEnv, build_resources_and_activities
 
-# ══════════════════════════════════════════════════════════════════════════
-# Training configuration
-# ══════════════════════════════════════════════════════════════════════════
 TOTAL_TIMESTEPS = 100_000   # increase for better policy quality
 N_STEPS         = 2_048     # PPO rollout length
 BATCH_SIZE      = 64
@@ -72,16 +46,11 @@ N_EPOCHS        = 10
 LEARNING_RATE   = 3e-4
 SEED            = 42
 
-# Use a shorter window during training to keep episodes manageable.
 TRAIN_START = "2016-01-01 00:00:00+00:00"
-TRAIN_END   = "2016-04-01 00:00:00+00:00"   # 3 months
+TRAIN_END   = "2016-04-01 00:00:00+00:00"   # 3 months — keeps episodes short
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Reward-logging callback
-# ══════════════════════════════════════════════════════════════════════════
 class EpisodeLogger(BaseCallback):
-    """Logs episode rewards to CSV for learning-curve analysis."""
 
     def __init__(self, csv_path: str, log_every: int = 10) -> None:
         super().__init__(verbose=0)
@@ -95,7 +64,6 @@ class EpisodeLogger(BaseCallback):
         self._fh.flush()
 
     def _on_step(self) -> bool:
-        # SB3 stores episode info in the info dict when an episode ends.
         infos = self.locals.get("infos", [])
         for info in infos:
             ep_info = info.get("episode")
@@ -111,22 +79,16 @@ class EpisodeLogger(BaseCallback):
                         f"step {self.num_timesteps:>8}  "
                         f"mean_reward={mean_r:.3f}"
                     )
-        return True  # continue training
+        return True
 
     def _on_training_end(self) -> None:
         self._fh.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Action-masking wrapper expected by sb3_contrib.ActionMasker
-# ══════════════════════════════════════════════════════════════════════════
 def _get_action_mask(env: BPSimEnv) -> np.ndarray:
     return env.action_masks()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
 def main() -> None:
     project_root = Path(__file__).resolve().parent.parent
     data_dir   = project_root / "data"
@@ -144,9 +106,6 @@ def main() -> None:
     print(f"  |R| = {len(all_resources)},  |A| = {len(all_activities)}")
     print(f"  action_space size = {len(all_resources) * len(all_activities) + 1}")
 
-    # ── Build engine kwargs (same as run_simulation, but shorter training window) ─
-    # Using "advanced" mode (2h buckets) to match the full simulation configuration.
-    # The training window is trimmed to 3 months so each episode completes quickly.
     mode = "advanced"
     arrivals_cache     = str(models_dir / "arrival_model_1_2.pkl")
     availability_cache = str(models_dir / f"availability_{mode}_1_5.pkl")
@@ -171,7 +130,7 @@ def main() -> None:
         out_csv_path       = str(models_dir / "_rl_train_tmp.csv"),
         seed               = SEED,
         batch_size         = 1,
-        # allocation_method is forced to "rl" inside BPSimEnv.reset()
+        # allocation_method is forced to "rl" inside BPSimEnv
     )
 
     print("[RL-TRAIN] Constructing environment …")
@@ -181,11 +140,8 @@ def main() -> None:
         all_activities = all_activities,
     )
 
-    # Wrap with ActionMasker so MaskablePPO queries action_masks() automatically.
     env = ActionMasker(env, _get_action_mask)
 
-    # Wrap with Monitor so SB3 writes episode statistics into the info dict.
-    # EpisodeLogger reads the "episode" key to log rewards to CSV.
     from stable_baselines3.common.monitor import Monitor
     env = Monitor(env)
 

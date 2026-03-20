@@ -7,25 +7,12 @@ full evaluation framework.
 
 ---
 
-## Table of Contents
-1. [Prerequisites](#prerequisites)
-2. [Data Setup](#data-setup)
-3. [Folder Structure](#folder-structure)
-4. [Quick Start](#quick-start)
-5. [All Scripts](#all-scripts)
-6. [Allocation Methods](#allocation-methods)
-7. [Evaluation Metrics](#evaluation-metrics)
-8. [Workforce Optimization](#workforce-optimization)
-9. [Deep RL (Optional)](#deep-rl-optional)
-
----
-
 ## Prerequisites
 
 Python **3.10+** is required. Install all dependencies:
 
 ```bash
-pip install pandas numpy scipy scikit-learn joblib matplotlib lxml pm4py
+pip install pandas numpy scipy scikit-learn joblib matplotlib lxml pm4py lightgbm
 ```
 
 For the Deep RL method (optional):
@@ -41,12 +28,12 @@ The raw event log is **not** included in the repository (too large for git).
 
 1. Download **BPI Challenge 2017** (`bpi2017.csv`) from the 4TU repository
    or your course materials.
-2. Place it at the **project root** (same level as `src/` and `data/`):
+2. Place it inside the `data/` folder:
 
 ```
 Business-Process-Simulation-Model-main/
-├── bpi2017.csv          ← place here
 ├── data/
+│   ├── bpi2017.csv          ← place here
 │   └── Signavio_Model.bpmn
 ├── src/
 │   └── ...
@@ -60,12 +47,12 @@ Business-Process-Simulation-Model-main/
 
 ```
 .
-├── bpi2017.csv                        # Raw event log (download separately)
 ├── data/
+│   ├── bpi2017.csv                    # Raw event log (download separately)
 │   └── Signavio_Model.bpmn            # BPMN process model
 ├── models/                            # Auto-generated .pkl artifacts (git-ignored)
 ├── outputs/
-│   └── task_1_2_analysis_report.pdf   # Final evaluation report (real results)
+│   └── task_1_2_analysis_report.pdf   # Final evaluation report
 ├── src/
 │   ├── simulation_engine_1_1.py       # Core DES engine
 │   ├── arrival_model_1_2.py           # Case arrival process
@@ -83,7 +70,7 @@ Business-Process-Simulation-Model-main/
 │   ├── run_simulation.py              # Run a single allocation config
 │   ├── evaluation.py                  # Evaluation metrics module
 │   ├── run_evaluation.py              # Run all configs + optimization
-│   └── generate_analysis_report.py   # PDF report generator (real data)
+│   └── generate_analysis_report.py    # PDF report generator
 └── README.md
 ```
 
@@ -91,28 +78,24 @@ Business-Process-Simulation-Model-main/
 
 ## Quick Start
 
-> **Windows note:** Always prefix Python commands with
-> `PYTHONIOENCODING=utf-8` to avoid encoding errors with special characters
-> printed by some training scripts.
-
 ### Option A — Run everything at once (recommended)
 
 ```bash
 cd src
-PYTHONIOENCODING=utf-8 python run_evaluation.py
+python run_evaluation.py
 ```
 
 This single command:
-1. Trains all sub-models automatically if they don't exist yet (~2–5 min first run)
+1. Trains all sub-models automatically if they don't exist yet (~2-5 min first run)
 2. Runs the simulation for **all 5 allocation methods** for the full year 2016
 3. Identifies the 2 least-contributing employees and re-runs the baseline without them
 4. Prints a metric comparison table to the console
 5. Saves all output CSVs to `outputs/`
 
-Then generate the PDF report with real results:
+Then generate the PDF report:
 
 ```bash
-PYTHONIOENCODING=utf-8 python generate_analysis_report.py
+python generate_analysis_report.py
 ```
 
 Output: `outputs/task_1_2_analysis_report.pdf`
@@ -121,49 +104,24 @@ Output: `outputs/task_1_2_analysis_report.pdf`
 
 ### Option B — Run a single config
 
-Edit the `config` variable at the bottom of `run_simulation.py`, then:
+Edit the `config` variable in `run_simulation.py`, then:
 
 ```bash
 cd src
-PYTHONIOENCODING=utf-8 python run_simulation.py
+python run_simulation.py
 ```
 
 Available configs: `r_rma`, `r_rra`, `r_shq`, `kbatch`, `park_song`, `rl`
 
 ---
 
-### Option C — Compute metrics on an existing log
-
-```python
-from evaluation import compute_all_metrics, print_comparison_table
-
-metrics = compute_all_metrics("outputs/eval_r_rma.csv")
-print_comparison_table({"r_rma": metrics})
-```
-
----
-
-## All Scripts
-
-| Script | Purpose |
-|---|---|
-| `run_simulation.py` | Run one allocation config, save log CSV |
-| `run_evaluation.py` | Run all configs, compare metrics, fire-2-employees scenario |
-| `generate_analysis_report.py` | Generate 7-page PDF from real simulation results |
-| `evaluation.py` | Standalone metrics module (importable) |
-| `rl_train.py` | Train the Deep RL policy (optional, needs `gymnasium`) |
-
----
-
 ## Allocation Methods
-
-Six methods are implemented in `simulation_engine_1_1.py`:
 
 | Config key | Method | Description |
 |---|---|---|
 | `r_rma` | **Random (R-RMA)** | Pick a random authorized resource for each task |
 | `r_rra` | **Round-Robin (R-RRA)** | Rotate through resources in fixed order |
-| `r_shq` | **Shortest Queue (R-SHQ)** | Assign to the resource with fewest waiting tasks |
+| `r_shq` | **Shortest Queue (R-SHQ)** | Assign to the resource with fewest historical tasks |
 | `kbatch` | **K-Batching (k=5)** | Wait for 5 tasks, then solve a cost-matrix assignment with the Hungarian algorithm |
 | `park_song` | **Park & Song (2019)** | Predict upcoming tasks using a bigram model; include predictions in the cost matrix to enable strategic idling |
 | `rl` | **Deep RL (Middelhuis et al. 2025)** | MaskablePPO policy trained via a Gymnasium wrapper — requires `python rl_train.py` first |
@@ -172,23 +130,21 @@ Six methods are implemented in `simulation_engine_1_1.py`:
 
 | Metric | R-RMA | R-RRA | R-SHQ | K-Batch | Park & Song |
 |---|---|---|---|---|---|
-| Avg Cycle Time (h) | 1.295 | 1.503 | 1.507 | **1.198** | 1.439 |
-| P90 Cycle Time (h) | **2.000** | 4.000 | 4.000 | 4.000 | 4.001 |
-| Avg Resource Occ (%) | 28.6% | 28.5% | 34.9% | 23.1% | 37.1% |
-| Resource Fairness | 0.304 | 0.293 | 0.256 | **0.248** | 0.292 |
-| Avg Waiting Time (h) | **1.489** | 1.470 | 1.631 | 1.696 | 1.716 |
-| Throughput (cases/day) | 6.96 | 6.15 | 6.72 | **10.70** | 7.61 |
-| Completed Cases | 2,547 | 2,251 | 2,461 | **3,915** | 2,786 |
+| Avg Cycle Time (h) | 1.283 | **1.180** | 1.372 | 1.339 | 1.404 |
+| P90 Cycle Time (h) | **2.001** | **2.001** | 4.000 | 4.002 | 4.000 |
+| Avg Resource Occ (%) | 30.1% | 29.4% | 37.4% | 21.4% | **39.3%** |
+| Resource Fairness | 0.262 | 0.250 | 0.293 | **0.225** | 0.268 |
+| Avg Waiting Time (h) | 1.569 | **1.329** | 1.481 | 1.814 | 1.951 |
+| Throughput (cases/day) | 6.76 | 6.33 | 6.22 | **10.56** | 7.90 |
+| Completed Cases | 2,473 | 2,318 | 2,276 | **3,866** | 2,893 |
 
-**K-Batch** wins on throughput and average cycle time.
-**R-RMA** wins on P90 cycle time (avoids long-tail stacking).
-**K-Batch** is also the fairest in terms of load distribution.
+**K-Batch** wins on throughput and fairness.
+**R-RRA** wins on average cycle time, P90, and waiting time.
+**Park & Song** achieves the highest resource occupation.
 
 ---
 
 ## Evaluation Metrics
-
-All metrics are computed by `evaluation.py` from a simulated log CSV.
 
 ### Basic (required by assignment)
 
@@ -219,19 +175,15 @@ The two with the lowest score contribute least and are safest to remove.
 
 **Results (BPI 2017):**
 
-The two candidates (User_114, User_122) had **0 tasks and 0% occupation** —
-effectively inactive accounts. Impact of removing them:
+The two candidates (User_11, User_101) were the least-contributing resources.
+Impact of removing them:
 
-| | Baseline | After firing 2 |
-|---|---|---|
-| Avg Cycle Time | 1.295 h | 1.337 h (+0.04 h) |
-| Avg Occupation | 28.6% | 31.4% (+2.9 pp) |
-| Throughput | 6.96 c/day | 6.43 c/day (-0.53) |
-| Fairness | 0.304 | 0.289 (improved) |
-
-To also run the **nine-to-five schedule** scenario (restrict all resources to
-09:00–17:00 Mon–Fri), uncomment `run_nine_to_five()` at the bottom of
-`run_evaluation.py`.
+| | Baseline | After firing 2 | Delta |
+|---|---|---|---|
+| Avg Cycle Time | 1.283 h | 1.610 h | +0.33 h |
+| P90 Cycle Time | 2.001 h | 3.994 h | +1.99 h |
+| Avg Occupation | 30.1% | 30.2% | +0.2 pp |
+| Throughput | 6.76 c/day | 6.90 c/day | +0.15 |
 
 ---
 
@@ -242,28 +194,9 @@ Requires `gymnasium`, `stable-baselines3`, and `sb3-contrib`.
 ```bash
 # Step 1 — train the policy (~100k timesteps on 3 months of data)
 cd src
-PYTHONIOENCODING=utf-8 python rl_train.py
-# Saves: models/rl_policy.zip  and  models/rl_learning_curve.csv
+python rl_train.py
 
 # Step 2 — run simulation with the trained policy
-# Edit run_simulation.py: set config = "rl"  at the bottom
-PYTHONIOENCODING=utf-8 python run_simulation.py
+# Edit run_simulation.py: set config = "rl"
+python run_simulation.py
 ```
-
-The RL method uses **MaskablePPO** with:
-- State: `[busy x |R|, remaining_norm x |R|, task_count x |A|]`
-- Actions: `Discrete(|R| x |A| + 1)` where the last action means Postpone
-- Reward: `-cycle_time_hours` per completed case, `-0.001` per step
-
----
-
-## References
-
-[1] Park, G., & Song, M. (2019). Prediction-based resource allocation using
-LSTM and minimum cost and maximum flow algorithm. ICPM 2019, pp. 121-128.
-
-[2] Kunkler, M., & Rinderle-Ma, S. (2024). Online resource allocation to
-process tasks under uncertain resource availabilities. ICPM 2024, pp. 137-144.
-
-[3] Middelhuis, J., et al. (2025). Learning policies for resource allocation
-in business processes. Information Systems, 128, 102492.

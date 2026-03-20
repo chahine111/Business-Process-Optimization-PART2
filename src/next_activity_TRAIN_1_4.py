@@ -1,21 +1,8 @@
 """
 src/next_activity_TRAIN_1_4.py
 
-Task 1.4 — Next Activity Predictor (Training Module).
-
-This script trains a probabilistic Bigram Model to predict the next process step.
-It learns conditional probabilities: P(next | prev2, prev1).
-
-Logic:
-1.  **Sequence Extraction**: Sorts events by case and timestamp to build trace sequences.
-2.  **N-Gram Learning**:
-    -   **Bigram**: P(next | prev2, prev1) - Primary predictor.
-    -   **Unigram**: P(next | prev1) - Backoff if the 2-step history is unseen.
-    -   **Global**: P(next) - Final fallback.
-3.  **Persistence**: Saves the learned probabilities as a dictionary structure in a `.pkl` file.
-
-Usage:
-    python src/next_activity_TRAIN_1_4.py
+Trains a bigram next-activity model P(next | prev2, prev1) with unigram and global fallbacks.
+Run directly to retrain: python src/next_activity_TRAIN_1_4.py
 """
 
 from __future__ import annotations
@@ -33,36 +20,25 @@ except ImportError:
     pm4py = None
 
 
-# -------------------------
-# PATH CONFIGURATION
-# -------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Default Input/Output Paths
 CSV_PATH = str(DATA_DIR / "bpi2017.csv")
-XES_PATH = None  # Optional fallback
+XES_PATH = None
 
 OUT_PKL = str(MODELS_DIR / "next_activity_bigram_model.pkl")
 OUT_CSV = str(MODELS_DIR / "next_activity_bigram_summary.csv")
 
-# Filtering Configuration
 END_TRANSITIONS = {"complete", "withdraw", "ate_abort"}
 ONLY_WORKFLOW_ACTIVITIES = False
 MIN_CONTEXT_COUNT = 5
 START_TOKEN = "__START__"
 
 
-# -------------------------
-# DATA LOADING
-# -------------------------
 def load_log(xes_path: Optional[str], csv_path: Optional[str]) -> pd.DataFrame:
-    """
-    Loads the event log from CSV (preferred) or XES.
-    Performs standard preprocessing: column checks, timestamp parsing, and sorting.
-    """
+    """Load event log from CSV (preferred) or XES, parse timestamps, sort."""
     use_csv = csv_path is not None and os.path.exists(csv_path)
     use_xes = xes_path is not None and os.path.exists(xes_path)
 
@@ -89,7 +65,6 @@ def load_log(xes_path: Optional[str], csv_path: Optional[str]) -> pd.DataFrame:
     df = df.copy()
     df["_row_id"] = np.arange(len(df), dtype=np.int64)
 
-    # Robust timestamp parsing for mixed formats (common in BPI datasets)
     df["time:timestamp"] = pd.to_datetime(
         df["time:timestamp"], errors="coerce", utc=True, format="mixed"
     )
@@ -101,7 +76,6 @@ def load_log(xes_path: Optional[str], csv_path: Optional[str]) -> pd.DataFrame:
         df["lifecycle:transition"].astype(str).str.lower().str.strip()
     )
 
-    # Sort strictly to ensure correct sequence learning
     df = df.sort_values(["case:concept:name", "time:timestamp", "_row_id"])
     print(
         f"Loaded | events={len(df)} | cases={df['case:concept:name'].nunique()} | source={source}"
@@ -109,14 +83,8 @@ def load_log(xes_path: Optional[str], csv_path: Optional[str]) -> pd.DataFrame:
     return df
 
 
-# -------------------------
-# SEQUENCE BUILDING
-# -------------------------
 def build_sequences(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filters the log to keep only relevant transitions (end/complete)
-    and constructs the chronological sequence of activities per case.
-    """
+    """Filter to complete/withdraw/ate_abort transitions and sort per case."""
     cols = ["case:concept:name", "concept:name", "time:timestamp", "lifecycle:transition", "_row_id"]
     w = df[cols].copy()
 
@@ -130,25 +98,17 @@ def build_sequences(df: pd.DataFrame) -> pd.DataFrame:
     return w
 
 
-# -------------------------
-# MODEL TRAINING
-# -------------------------
 def train_next_activity_model(df_events: pd.DataFrame):
-    """
-    Trains the Bigram/Unigram/Global probability models.
-    Returns the dictionary artifact ready for serialization.
-    """
+    """Train bigram/unigram/global models and return the artifact dict."""
     sequences = build_sequences(df_events)
 
-    # Build N-Gram Triples: (prev2, prev1) -> next
     rows: List[Tuple[str, str, str]] = []
     for _, g in sequences.groupby("case:concept:name", sort=False):
         acts = g["concept:name"].tolist()
         if len(acts) < 1:
             continue
 
-        # Padding for start of case
-        acts = [START_TOKEN, START_TOKEN] + acts
+        acts = [START_TOKEN, START_TOKEN] + acts  # pad start
 
         for i in range(2, len(acts)):
             prev2, prev1, nxt = acts[i - 2], acts[i - 1], acts[i]
@@ -158,26 +118,21 @@ def train_next_activity_model(df_events: pd.DataFrame):
     if triples.empty:
         raise RuntimeError("No triples could be built (check data filters).")
 
-    # 1. Bigram Counts P(next | prev2, prev1)
     c_bigram = triples.groupby(["prev2", "prev1", "next"]).size().rename("count").reset_index()
     c_context = triples.groupby(["prev2", "prev1"]).size().rename("context_count").reset_index()
     c_bigram = c_bigram.merge(c_context, on=["prev2", "prev1"], how="left")
 
-    # Filter rare contexts to reduce noise
-    c_bigram = c_bigram[c_bigram["context_count"] >= MIN_CONTEXT_COUNT].copy()
+    c_bigram = c_bigram[c_bigram["context_count"] >= MIN_CONTEXT_COUNT].copy()  # drop rare contexts
     c_bigram["prob"] = c_bigram["count"] / c_bigram["context_count"]
 
-    # 2. Unigram Backoff P(next | prev1)
     c_uni = triples.groupby(["prev1", "next"]).size().rename("count").reset_index()
     c_uni_ctx = triples.groupby(["prev1"]).size().rename("context_count").reset_index()
     c_uni = c_uni.merge(c_uni_ctx, on=["prev1"], how="left")
     c_uni["prob"] = c_uni["count"] / c_uni["context_count"]
 
-    # 3. Global Backoff P(next)
     c_glob = triples["next"].value_counts().rename_axis("next").reset_index(name="count")
     c_glob["prob"] = c_glob["count"] / c_glob["count"].sum()
 
-    # Optimized Dictionary Format for fast runtime lookup
     bigram_dict: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for (p2, p1), gg in c_bigram.groupby(["prev2", "prev1"]):
         bigram_dict[(p2, p1)] = {
@@ -235,15 +190,12 @@ def save_summary(c_bigram: pd.DataFrame, out_csv: str):
     summary.to_csv(out_csv, index=False)
 
 
-# -------------------------
-# MAIN EXECUTION
-# -------------------------
 if __name__ == "__main__":
     df = load_log(XES_PATH, CSV_PATH)
     model, c_bigram, c_uni, c_glob = train_next_activity_model(df)
 
     joblib.dump(model, OUT_PKL)
-    print(f"✅ Saved model: {OUT_PKL}")
+    print(f" Saved model: {OUT_PKL}")
 
     save_summary(c_bigram, OUT_CSV)
-    print(f"✅ Saved summary: {OUT_CSV}")
+    print(f" Saved summary: {OUT_CSV}")

@@ -1,22 +1,8 @@
 """
 src/next_activity_predictor_1_4.py
 
-Module 1.4 — Next Activity Predictor (Runtime Wrapper).
-
-This module serves as the interface for the Next Activity Prediction logic.
-It imports the predictor class defined in the training module (`next_activity_TRAIN_1_4.py`)
-and initializes it with the trained model artifact.
-
-Why is this needed?
--------------------
-It standardizes the API for the Simulation Engine (1.1). The engine simply calls:
-    `predictor = load_next_activity_predictor(model_path)`
-without needing to know the internal details of where the class is defined.
-
-Usage:
-    from next_activity_predictor_1_4 import load_next_activity_predictor
-    predictor = load_next_activity_predictor("models/next_activity_bigram_model.pkl")
-    next_task = predictor.sample_next(prev2, prev1, allowed_next=[...])
+Loads the trained bigram next-activity model and exposes sample_next().
+Wraps next_activity_TRAIN_1_4.py so the engine doesn't need to import it directly.
 """
 
 from __future__ import annotations
@@ -25,27 +11,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Add current directory to path to ensure we can import the training module
 current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.append(str(current_dir))
 
-# Import the class directly from the clean training script
-# Note: Ensure 'next_activity_TRAIN_1_4.py' is in the same folder (src/)
 try:
     from next_activity_TRAIN_1_4 import NextActivityPredictor
 except ImportError:
-    # Fallback class if the training script doesn't expose it directly yet
-    # (This handles cases where the class might be defined inside a main block or closure)
+    # fallback — define the class inline if the training module isn't importable
     import joblib
     import numpy as np
     from typing import Optional, List
 
     class NextActivityPredictor:
-        """
-        Runtime wrapper for Next Activity Prediction.
-        Loads the Bigram model dictionary from a pickle file.
-        """
 
         def __init__(self, model_path: str, seed: int = 42):
             self.model = joblib.load(model_path)
@@ -57,7 +35,6 @@ except ImportError:
             prob_array: np.ndarray,
             allowed_next: Optional[List[str]] = None,
         ) -> str:
-            """Helper to sample a next activity, respecting BPMN constraints."""
             next_list = list(next_list)
             prob = np.array(prob_array, dtype=float)
 
@@ -88,10 +65,6 @@ except ImportError:
             prev1: Optional[str],
             allowed_next: Optional[List[str]] = None,
         ) -> str:
-            """
-            Predicts the next activity.
-            Strategy: Bigram -> Unigram -> Global Backoff.
-            """
             # 1. Bigram
             if prev2 is not None and prev1 is not None:
                 key = (prev2, prev1)
@@ -111,25 +84,17 @@ except ImportError:
 
 def load_next_activity_predictor(
     model_path: str,
-    peer_py_path: str = "next_activity_TRAIN_1_4.py", # Default to standard file
+    peer_py_path: str = "next_activity_TRAIN_1_4.py",
     seed: int = 42
 ) -> Any:
-    """
-    Factory function to initialize the predictor.
-    Resolves paths robustly.
-    """
-    # --------------------------
-    # Resolve Model Path
-    # --------------------------
+    """Load the predictor; tries models/ folder if path isn't found directly."""
     mpath = Path(model_path)
     if not mpath.exists():
-        # Check project/models/
         project_root = Path(__file__).resolve().parents[1]
         candidate = project_root / "models" / model_path
         if candidate.exists():
             mpath = candidate
         else:
-            # Check just the filename in models/
             candidate_name = project_root / "models" / Path(model_path).name
             if candidate_name.exists():
                 mpath = candidate_name

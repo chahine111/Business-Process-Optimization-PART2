@@ -1,20 +1,8 @@
 """
 src/processing_times_TRAIN.py
 
-Module 1.3 — Processing Time Training Module.
-
-This script is responsible for learning the duration of business process activities
-from historical event logs. It employs a hybrid approach:
-1.  **Basic Distributions**: Fits statistical distributions (LogNorm, Gamma, etc.) 
-    for simple activities.
-2.  **Advanced ML Models**: Trains LightGBM Quantile Regressors for complex, 
-    manual activities where duration depends on case attributes (e.g., Loan Amount).
-
-The training artifact is saved as a `.pkl` file, which is loaded by the 
-simulation engine (1.1) at runtime.
-
-Usage:
-    python src/processing_times_TRAIN.py
+Learns activity durations from the event log.
+Simple activities get stat distributions; W_* activities get LightGBM quantile models.
 """
 
 from __future__ import annotations
@@ -41,9 +29,9 @@ except ImportError:
 warnings.filterwarnings("ignore")
 
 
-# ============================================================
+# ---
 # PATH CONFIGURATION
-# ============================================================
+# ---
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -53,13 +41,9 @@ CSV_PATH = str(DATA_DIR / "bpi2017.csv")
 MODEL_PATH = str(MODELS_DIR / "processing_model_advanced.pkl")
 
 
-# ============================================================
-# 1) Data Analysis Helpers
-# ============================================================
 def analyze_lifecycle_transitions(df: pd.DataFrame):
-    """Prints a summary of lifecycle transitions found in the log."""
     if "lifecycle:transition" not in df.columns:
-        print("⚠️ Warning: No 'lifecycle:transition' column found")
+        print("[WARN] No lifecycle:transition column found")
         return
 
     vc = df["lifecycle:transition"].astype(str).value_counts().head(20)
@@ -67,19 +51,8 @@ def analyze_lifecycle_transitions(df: pd.DataFrame):
     print(vc)
 
 
-# ============================================================
-# 2) Duration Extraction Logic
-# ============================================================
 def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Computes NET duration for each activity instance.
-    Net Duration = (End Time - Start Time) - (Suspended Intervals).
-    
-    Logic:
-    - Sorts events chronologically per case.
-    - Tracks state machine: start -> suspend -> resume -> complete.
-    - Aggregates active working time only.
-    """
+    """Compute net working time per activity instance (excludes suspend gaps)."""
     print("\n[INFO] Calculating NET durations...")
 
     required_cols = ["case:concept:name", "concept:name", "time:timestamp"]
@@ -90,15 +63,13 @@ def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
     if "lifecycle:transition" not in df.columns:
         raise ValueError("Missing lifecycle:transition column")
 
-    # Sort for sequential processing
     df = df.sort_values(["case:concept:name", "time:timestamp"]).copy()
 
     WORK_TRANSITIONS = {"start", "resume", "suspend", "complete"}
 
-    # Optimization: Filter relevant rows
     dfx = df[df["lifecycle:transition"].astype(str).isin(WORK_TRANSITIONS)].copy()
     if len(dfx) == 0:
-        print("⚠️ No work transitions found (start/resume/suspend/complete).")
+        print("[WARN] No work transitions found.")
         return pd.DataFrame(
             columns=["case:concept:name", "concept:name", "org:resource", "net_duration_sec"]
         )
@@ -108,7 +79,6 @@ def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
 
     records = []
 
-    # Process each case
     for case_id, g in dfx.groupby("case:concept:name"):
         current_activity = None
         current_resource = None
@@ -140,7 +110,6 @@ def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
                     working = False
                     last_start_time = None
 
-                # Commit completed segment
                 if current_activity is not None:
                     records.append(
                         {
@@ -151,7 +120,6 @@ def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
                         }
                     )
 
-                # Reset for next activity
                 current_activity = None
                 current_resource = None
                 net_work = 0.0
@@ -165,14 +133,8 @@ def calculate_net_durations_optimized(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ============================================================
-# 3) Basic Statistical Fitting
-# ============================================================
 def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) -> dict:
-    """
-    Fits standard statistical distributions (LogNorm, Gamma, Expon, Norm)
-    to activity durations. Selects the best fit based on Log-Likelihood.
-    """
+    """Fit LogNorm/Gamma/Expon/Norm per activity; pick best by log-likelihood."""
     print("\n[INFO] Fitting BASIC distributions per activity...")
 
     basic = {}
@@ -183,14 +145,14 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
     for act, g in duration_df.groupby("concept:name"):
         x = g["net_duration_sec"].to_numpy(dtype=float)
         x = x[np.isfinite(x)]
-        x = x[x > 0]  # Distributions typically require positive support
+        x = x[x > 0]
 
         if len(x) < min_samples:
             continue
 
         candidates = []
 
-        # 1. LogNormal
+        # try each family
         try:
             shape, loc, scale = stats.lognorm.fit(x, floc=0)
             ll = np.sum(stats.lognorm.logpdf(x, shape, loc=loc, scale=scale))
@@ -198,7 +160,6 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
         except Exception:
             pass
 
-        # 2. Gamma
         try:
             a, loc, scale = stats.gamma.fit(x, floc=0)
             ll = np.sum(stats.gamma.logpdf(x, a, loc=loc, scale=scale))
@@ -206,7 +167,6 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
         except Exception:
             pass
 
-        # 3. Exponential
         try:
             loc, scale = stats.expon.fit(x, floc=0)
             ll = np.sum(stats.expon.logpdf(x, loc=loc, scale=scale))
@@ -214,7 +174,6 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
         except Exception:
             pass
 
-        # 4. Normal
         try:
             mu, sigma = stats.norm.fit(x)
             ll = np.sum(stats.norm.logpdf(x, mu, sigma))
@@ -225,7 +184,6 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
         if not candidates:
             continue
 
-        # Select best fit
         dist_name, params, _ = max(candidates, key=lambda z: z[2])
 
         basic[act] = {
@@ -240,25 +198,20 @@ def fit_basic_distributions(duration_df: pd.DataFrame, min_samples: int = 50) ->
     return basic
 
 
-# ============================================================
-# 4) Feature Engineering for ML
-# ============================================================
 def merge_case_attributes(df_events: pd.DataFrame, duration_df: pd.DataFrame) -> pd.DataFrame:
-    """Merges static case attributes (LoanGoal, Amount) into the duration DataFrame."""
     case_cols = [c for c in df_events.columns if str(c).startswith("case:")]
     case_cols = [c for c in case_cols if c != "case:concept:name"]
 
     if len(case_cols) == 0:
         return duration_df
 
-    # Extract first value per case (attributes are static)
+    # case attributes are static — take first value per case
     case_attrs = df_events.groupby("case:concept:name", as_index=False)[case_cols].first()
     merged = duration_df.merge(case_attrs, on="case:concept:name", how="left")
     return merged
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Converts raw columns into numeric/categorical features suitable for ML."""
     out = df.copy()
 
     if "case:RequestedAmount" in out.columns:
@@ -278,7 +231,6 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def prepare_training_data(merged_df: pd.DataFrame, target_col: str = "net_duration_sec"):
-    """Prepares Feature Matrix (X) and Target Vector (y) for LightGBM."""
     df = merged_df.copy()
     df = engineer_features(df)
 
@@ -294,10 +246,7 @@ def prepare_training_data(merged_df: pd.DataFrame, target_col: str = "net_durati
 
 
 def _sanitize_feature_names(cols):
-    """
-    Sanitizes column names for LightGBM compatibility.
-    Replaces special characters (like ':') with underscores and ensures uniqueness.
-    """
+    """Replace special characters in column names so LightGBM doesn't complain."""
     mapping = {}
     used = set()
 
@@ -322,23 +271,16 @@ def _sanitize_feature_names(cols):
 
 
 def train_lgbm_quantile_models(X, y, quantiles=(0.1, 0.5, 0.9)):
-    """
-    Trains LightGBM regressors for specific quantiles (10%, 50%, 90%).
-    Captures variability and outliers in process durations.
-    """
     models = {}
     X_train = X.copy()
 
-    # Handle categorical columns
     for col in X_train.columns:
         if str(X_train[col].dtype) == "category":
             X_train[col] = X_train[col].cat.codes.replace(-1, np.nan)
 
-    # Impute missing numeric values
     median_fill = X_train.median(numeric_only=True).to_dict()
     X_train = X_train.fillna(median_fill)
 
-    # Sanitize feature names
     feature_name_map = _sanitize_feature_names(list(X_train.columns))
     X_train = X_train.rename(columns=feature_name_map)
 
@@ -364,9 +306,6 @@ def train_lgbm_quantile_models(X, y, quantiles=(0.1, 0.5, 0.9)):
     return models, list(X_train.columns), median_fill_renamed, feature_name_map
 
 
-# ============================================================
-# 5) Main Training Pipeline
-# ============================================================
 def train_processing_model(
     log_path: str = CSV_PATH,
     model_path: str = MODEL_PATH,
@@ -379,7 +318,6 @@ def train_processing_model(
 
     print("\n[INFO] Loading event log...")
 
-    # Fast path: CSV
     if str(log_path).lower().endswith(".csv"):
         df = pd.read_csv(log_path, low_memory=False)
         print("   -> Loaded CSV directly")
@@ -392,7 +330,6 @@ def train_processing_model(
 
     print(f"   -> Loaded {len(df):,} events from {df['case:concept:name'].nunique():,} cases")
 
-    # Preprocessing
     df["time:timestamp"] = pd.to_datetime(
         df["time:timestamp"], utc=True, format="mixed", errors="coerce"
     )
@@ -400,13 +337,9 @@ def train_processing_model(
 
     analyze_lifecycle_transitions(df)
 
-    # 1. Calculate durations
     duration_df = calculate_net_durations_optimized(df)
-
-    # 2. Train Basic Models
     basic_distributions = fit_basic_distributions(duration_df, min_samples=50)
 
-    # 3. Train Advanced ML Models
     ADV_ACTIVITIES = [
         "W_Validate application",
         "W_Call after offers",
@@ -438,11 +371,9 @@ def train_processing_model(
                 "feature_name_map": feature_name_map,
             }
 
-    # 4. Calculate Fallback (Global Median)
     means = [v["mean"] for v in basic_distributions.values() if "mean" in v]
     fallback_sec = float(np.median(means)) if means else 600.0
 
-    # 5. Save Artifact
     artifact = {
         "basic_distributions": basic_distributions,
         "advanced_models": advanced_models,
@@ -451,15 +382,14 @@ def train_processing_model(
         "source_log": str(log_path),
     }
 
-    # Ensure output directory exists
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, model_path)
 
     print("\n" + "="*40)
-    print(f"✅ Model Saved: {model_path}")
-    print(f"   - Basic Distributions: {len(basic_distributions)}")
-    print(f"   - Advanced ML Models:  {len(advanced_models)}")
-    print(f"   - Global Fallback:     {fallback_sec:.2f} sec")
+    print(f"[DONE] Model saved: {model_path}")
+    print(f"   Basic distributions: {len(basic_distributions)}")
+    print(f"   Advanced ML models:  {len(advanced_models)}")
+    print(f"   Global fallback:     {fallback_sec:.2f} sec")
     print("="*40 + "\n")
 
 

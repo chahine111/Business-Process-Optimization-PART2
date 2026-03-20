@@ -1,36 +1,8 @@
 """
 src/run_evaluation.py
 
-Task 1.2 — Evaluation & Workforce Optimization.
-
-Part A — Method Comparison:
-    Runs the BPI 2017 simulation under five allocation configurations
-    (r_rma, r_rra, r_shq, kbatch, park_song) and computes the full
-    metric suite from evaluation.py.  Already-existing output CSVs are
-    reused so the script can be re-run cheaply after the first run.
-
-Part B — Workforce Optimization ("Fire Two Employees"):
-    Answers the management question:
-        "Which two employees should we fire?"
-
-    Approach:
-        1. Rank all resources by their combined utilization and task
-           volume in the baseline (r_rma) run.  Resources with the
-           lowest busy hours AND fewest completed tasks are the least
-           impactful to remove.
-        2. Re-run the baseline simulation with those two resources
-           excluded from the availability model.
-        3. Report metric deltas so management can see the trade-off.
-
-    Alternative scenario — "Reduce to Nine-to-Five" (commented out):
-        Uncomment the call to run_nine_to_five() at the bottom of main()
-        to evaluate the impact of restricting all resources to a strict
-        09:00–17:00 Mon–Fri schedule.
-
-How to run
-----------
-    cd <project_root>
-    python src/run_evaluation.py
+Part A: runs all 5 allocation configs for 2016 and compares metrics.
+Part B: identifies and removes the 2 least-contributing employees, re-runs baseline.
 """
 
 from __future__ import annotations
@@ -41,7 +13,6 @@ from typing import Any, Dict, Optional, Set
 
 import pandas as pd
 
-# Make src/ importable when running from the project root.
 src_dir = Path(__file__).resolve().parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
